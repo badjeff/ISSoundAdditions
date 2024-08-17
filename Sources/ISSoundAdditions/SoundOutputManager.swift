@@ -8,6 +8,7 @@
 import CoreAudio
 import AudioToolbox
 import Cocoa
+import CoreServices
 
 extension Sound {
   /// Mute, unmute and change the volume of the system default output device.
@@ -65,7 +66,7 @@ extension Sound {
       
       return result
     }
-    
+      
     /// Get the volume of the system default output device.
     ///
     /// - throws: `Errors.noDevice` if the system doesn't have a default output device; `Errors.unsupportedProperty` if the current device doesn't have a volume property; `Errors.operationFailed` if the system is unable to read the property value.
@@ -208,5 +209,63 @@ extension Sound {
         throw Errors.operationFailed(error)
       }
     }
+
+    public var didAudioDevicesChanged: (() -> Void)? = nil
+    var hasObserverForDidAudioDevicesChanged: Bool = false
+    
+    @objc
+    private func handleNotification(_ notification: Notification) {
+      if notification.name == AudioDevicNotification.audioDevicesDidChange.notificationName {
+        self.didAudioDevicesChanged?()
+      }
+    }
+
+    public func addAudioDevicesChangeObserver() throws {
+      guard let deviceID = try retrieveDefaultOutputDevice() else {
+        throw Errors.noDevice
+      }
+        if !self.hasObserverForDidAudioDevicesChanged {
+          var listenerAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertySelectorWildcard,
+            mScope: kAudioObjectPropertyScopeWildcard,
+            mElement: kAudioObjectPropertyElementWildcard
+          )
+          var propListener: AudioObjectPropertyListenerProc = { _, _, _, _ in
+            NotificationCenter.post(audioDevicNotification: .audioDevicesDidChange)
+            return 0
+          }
+          NotificationCenter.addObserver(observer: self,
+                                         selector: #selector(handleNotification(_:)),
+                                         name: .audioDevicesDidChange)
+          let error = AudioObjectAddPropertyListener(deviceID, &listenerAddr, propListener, nil)
+          guard error == noErr else {
+            throw Errors.operationFailed(error)
+          }
+          self.hasObserverForDidAudioDevicesChanged = true
+        }
+      }
+            
+  }
+}
+
+enum AudioDevicNotification: String {
+  case audioDevicesDidChange
+  var stringValue: String {
+    return "AudioDevicNotification_" + rawValue
+  }
+  var notificationName: NSNotification.Name {
+    return NSNotification.Name(stringValue)
+  }
+}
+
+extension NotificationCenter {
+  static func post(audioDevicNotification name: AudioDevicNotification, object: Any? = nil) {
+    NotificationCenter.default.post(name: name.notificationName, object: object)
+  }
+  static func addObserver(observer: Any, selector: Selector, name: AudioDevicNotification, object: Any? = nil) {
+    NotificationCenter.default.addObserver(observer, selector: selector, name: name.notificationName, object: object)
+  }
+  static func removeObserver(observer: Any, name: AudioDevicNotification, object: Any? = nil) {
+    NotificationCenter.default.removeObserver(observer, name: name.notificationName, object: object)
   }
 }
